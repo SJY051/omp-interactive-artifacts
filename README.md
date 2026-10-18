@@ -4,7 +4,13 @@ Interactive HTML/CSS/JavaScript pages, transcript cards, and MCP Apps for [OMP](
 
 **Status: experimental, AI-assisted development.** Verified against OMP **18.12.1** and Tern **0.9.4**; inline rendering requires the development branch below.
 
-<!-- Demo media links: add recordings and screenshots here. -->
+![Sorting race rendered inline in the omp transcript](docs/media/omp-inline-artifact-demo-viz.gif)
+
+Demos (inline mode, recorded in a headless Tern session with the default light theme; build and reply streaming are sped up):
+
+- [Sorting race](docs/media/omp-inline-artifact-demo-viz.mp4): three SVG charts update on every click, then the agent explains the current state.
+- [LRU cache explainer](docs/media/omp-inline-artifact-demo-lru.mp4): plain buttons, live cache state, and an agent round trip at the end.
+- [Token-bucket simulator screenshot](docs/media/omp-inline-artifact-a-token-bucket.png).
 
 ## Three surfaces
 
