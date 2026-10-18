@@ -1,4 +1,4 @@
-// Showing a page: in a Tern browser block (with capture) or the system browser.
+// Showing a page in a Tern browser block, with capture and a host allowlist.
 
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -239,9 +239,9 @@ export async function rethemeBlock(tern: TernEnv, block: number, css: string): P
 	return result.value === true;
 }
 
-/** Opens `url` in the default browser (macOS `open`); no capture is possible. */
+/** Opens a user-approved MCP link in the default browser (macOS `open`); never used for automatic view presentation. */
 export async function openExternally(url: string): Promise<void> {
-	if (process.platform !== "darwin") throw new Error(`no Tern pane and no macOS 'open' on ${process.platform}; open ${url} manually`);
+	if (process.platform !== "darwin") throw new Error(`no macOS 'open' on ${process.platform}; open ${url} manually`);
 	const proc = Bun.spawn(["open", url], { stdout: "ignore", stderr: "pipe" });
 	const [err, code] = await Promise.all([proc.stderr.text(), proc.exited]);
 	if (code !== 0) throw new Error(`open ${url} failed: ${err.trim()}`);

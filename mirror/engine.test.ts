@@ -37,7 +37,7 @@ let n=0;document.getElementById("inc").addEventListener("click",()=>{n++;documen
 
 let server: RunningServer | undefined;
 const engine = new MirrorEngine({ idleMs: 200 });
-const sent: Array<{ text: string; data?: unknown }> = [];
+const sent: Array<{ text: string; data?: unknown; gesture?: string }> = [];
 let html = CALC;
 
 async function load(source: string): Promise<MirrorSession> {
@@ -135,7 +135,34 @@ q.addEventListener("input",draw);draw();</script>`;
 		await session.click(goId);
 		await waitFor(() => sent.length === 1);
 		expect(sent[0]!.text).toBe("calc");
+		expect(sent[0]!.gesture).toBe("trusted-click");
 		await session.close();
+	}, 30_000);
+
+	test("script-initiated omp.send reports no user activation", async () => {
+		sent.length = 0;
+		const session = await load(`<p>Script</p><script>setTimeout(()=>omp.send("automatic"),100)</script>`);
+		await waitFor(() => sent.length === 1);
+		expect(sent[0]).toMatchObject({ text: "automatic", gesture: "none" });
+		await session.close();
+	}, 30_000);
+
+	test("popup clicks never reach another loopback service", async () => {
+		let hits = 0;
+		const collector = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => { hits++; return new Response("ok"); } });
+		let session: MirrorSession | undefined;
+		try {
+			const target = `http://127.0.0.1:${collector.port}/collect`;
+			session = await load(`<button id="popup">Popup</button><script>document.getElementById("popup").onclick=()=>window.open(${JSON.stringify(target)}, "_blank");</script>`);
+			const button = (await session.evalMirror('__m.find("#popup")')) as string;
+			for (let i = 0; i < 10; i++) expect(await session.click(button)).toBe(true);
+			// Real Chrome network integration: an absent request has no completion event, so allow a short delivery window.
+			await Bun.sleep(500);
+			expect(hits).toBe(0);
+		} finally {
+			await session?.close();
+			collector.stop(true);
+		}
 	}, 30_000);
 
 	test("a page that never yields is closed by the watchdog", async () => {

@@ -2,10 +2,10 @@
 // from the same server, served on its own origin, and shown in a Tern block. This module wires
 // the pieces: the OMP hook, the two servers, the handshake bridge and the Tern block.
 
-import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { AuditLog } from "./audit-log";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { AppBridge, type AuditEntry, type BridgeDeps, type CallToolResult, resourceUriOf, type ToolDef, visibilityOf } from "./app-bridge";
+import { AppBridge, type AuditEntry, type BridgeDeps, type CallToolResult, resourceUriOf, safeUri, type ToolDef, visibilityOf } from "./app-bridge";
 import { allowedHosts, buildAppCsp, type DeclaredCsp, sanitizeCsp } from "./csp";
 import { type Delivery, MCP_APP_KIND, type MessageSource, oneLine } from "./delivery";
 import { HOST_INFO, hostCapabilities, hostContext } from "./host-context";
@@ -111,12 +111,15 @@ export function createMcpApps(deps: McpAppsDeps): McpApps {
 	const byView = new Map<string, AppRecord>();
 	let sandbox: RunningServer | undefined;
 	let host: McpHost | undefined;
+	const logs = new Map<string, AuditLog>();
 
 	function audit(app: AppRecord, entry: AuditEntry | Record<string, unknown>): void {
-		const line = JSON.stringify({ t: new Date().toISOString(), app: app.id, server: app.server, tool: app.toolName, ...entry });
-		void mkdir(deps.sessionDir(app.session), { recursive: true })
-			.then(() => appendFile(join(deps.sessionDir(app.session), "mcp-apps.log.jsonl"), `${line}\n`))
-			.catch(() => undefined);
+		let log = logs.get(app.session);
+		if (!log) {
+			log = new AuditLog(join(deps.sessionDir(app.session), "mcp-apps.log.jsonl"));
+			logs.set(app.session, log);
+		}
+		log.append({ t: new Date().toISOString(), app: app.id, server: app.server, tool: app.toolName, ...entry });
 	}
 
 	function push(app: AppRecord, message: Record<string, unknown>): void {
@@ -154,7 +157,7 @@ export function createMcpApps(deps: McpAppsDeps): McpApps {
 		},
 		receive(shellToken, message) {
 			const app = byShell.get(shellToken);
-			if (app) void app.bridge.receive(message).catch(error => audit(app, { kind: "rejected", ok: false, detail: `bridge failure: ${(error as Error).message}` }));
+			if (app) void app.bridge.receive(message).catch(() => audit(app, { kind: "rejected", ok: false, detail: "bridge internal failure" }));
 		},
 	});
 
@@ -222,7 +225,8 @@ export function createMcpApps(deps: McpAppsDeps): McpApps {
 		const tool: ToolDef | undefined = handle?.tools().find(candidate => candidate.name === toolName);
 		const uri = tool ? resourceUriOf(tool) : undefined;
 		if (!host || !handle || !tool || !uri) return undefined;
-
+		const tern = detectTern();
+		if ("unavailable" in tern) return `[MCP app "${toolName}" was not opened (${tern.unavailable}): a protected Tern browser block is required. No system-browser fallback is used.]`;
 		try {
 			const read = await handle.readResource(uri, signal);
 			const content = pickContent(read, uri);
@@ -288,20 +292,13 @@ export function createMcpApps(deps: McpAppsDeps): McpApps {
 			audit(app, {
 				kind: "state",
 				detail: "opened",
-				uri,
+				uri: safeUri(uri),
 				bytes: Buffer.byteLength(html),
 				sha256: new Bun.CryptoHasher("sha256").update(html).digest("hex"),
-				csp: buildAppCsp(declared, hostOrigin),
-				rejectedCsp: rejected,
+				rejectedCspCount: rejected.length,
 			});
 
 			const shellUrl = `${hostOrigin}/m/${app.shellToken}/`;
-			const tern = detectTern();
-			if ("unavailable" in tern) {
-				await openExternally(shellUrl);
-				await Promise.race([app.ready, new Promise(resolve => setTimeout(resolve, 4000))]);
-				return `[MCP app "${title}" opened in the system browser (${tern.unavailable}).]`;
-			}
 			const shown = await presentInTern(tern, app.block, shellUrl, `/m/${app.shellToken}/`, signal, {
 				hosts: allowedHosts(declared),
 				capture: false,
@@ -335,6 +332,7 @@ export function createMcpApps(deps: McpAppsDeps): McpApps {
 		},
 		async closeAll(reason) {
 			await Promise.allSettled([...apps.values()].map(app => retire(app, reason)));
+			await Promise.allSettled([...logs.values()].map(log => log.flush()));
 			sandbox?.stop();
 			sandbox = undefined;
 		},

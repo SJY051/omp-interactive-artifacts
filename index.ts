@@ -9,7 +9,7 @@ import { registerInlineUi } from "./inline-ui";
 import { createMcpApps, type ToolResultInfo } from "./mcp-apps";
 import { composePalette, type NativeTheme, readTernSettings } from "./look";
 import { buildPage, type Palette, resolvePalette, themeCss } from "./page";
-import { blockAlive, browserBlocks, captureBlock, closeBlock, focusBlock, openExternally, type Placement, presentInTern, rethemeBlock, SETTLE_MS, sleep } from "./present";
+import { blockAlive, browserBlocks, captureBlock, closeBlock, focusBlock, type Placement, presentInTern, rethemeBlock } from "./present";
 import { type ArtifactRef, type PageError, type RunningServer, startServer } from "./server";
 import { detectTern, type TernEnv, ternAppearance } from "./tern";
 import { MirrorEngine } from "./mirror/engine";
@@ -20,12 +20,12 @@ const MAX_ERRORS = 50;
 /** How often open blocks are checked for a hand close and a theme switch. */
 const WATCH_MS = 2000;
 
-const DESCRIPTION = `Show an interactive HTML/CSS/JS page (chart, simulation, mini app) inline in this transcript or in a Tern browser block docked beside this pane (a floating block when the pane is narrow); outside Tern it opens the system browser.
+const DESCRIPTION = `Show an interactive HTML/CSS/JS page (chart, simulation, mini app) inline in this transcript or in a Tern browser block docked beside this pane (a floating block when the pane is narrow); outside Tern it saves the HTML and returns its path and URL without opening a browser.
 Actions: show {id?, title, html, surface?} creates or updates (same id = update in place; html is a full document or a body fragment); open {id, surface?} reopens a saved artifact; close {id}; list.
 surface: "auto" (default; leave it unset) shows a form, table or chart page inline when it fits a card and uses a block otherwise. "block" only when you must drive the page with the browser tool (it cannot attach to an inline card) or need a full browser; "inline" forces inline. The result names the surface used and why.
 Inline limits: the page runs in a hidden browser and is mirrored into terminal elements, so no WebGL/three.js, video, JS animation loops, pointer drag or position:fixed; CSS the terminal cannot draw is dropped; the terminal's font is used; SVG and canvas show as images. A closed inline card stays in the transcript as its last frame. A block shows the page unchanged. Inline needs a direct artifact call: through eval (tool.artifact) or another tool no card is drawn, so such a call gets a block.
-show/open return the surface, page errors seen within ~1s of load and, for a block, the URL, block id, placement and a screenshot (Tern only); for an inline card, the element count and the page's text. The user can reopen any artifact in a block from the transcript card or with /artifact [id].
-The page is sandboxed: no external network, inline script/style plus the bundled libraries only. Libraries (ES modules, in <script type="module">): import * as d3 from "d3"; import * as THREE from "three"; import { OrbitControls } from "three/addons/controls/OrbitControls.js"; import { Chart } from "chart.js/auto".
+show/open return the surface, page errors seen within ~1s of load and, for a Tern block, the URL, block id, placement and a screenshot; outside Tern the returned URL is NOT opened or network-isolated. For an inline card, they return the element count and the page's text. The user can reopen any artifact in a block from the transcript card or with /artifact [id].
+The page is sandboxed when rendered by the extension: artifact blocks restrict navigation to loopback, and inline pages intercept requests in headless Chromium. Do not assume that manually opening a returned URL has these protections. Libraries (ES modules, in <script type="module">): import * as d3 from "d3"; import * as THREE from "three"; import { OrbitControls } from "three/addons/controls/OrbitControls.js"; import { Chart } from "chart.js/auto".
 Page API: omp.send(text, data?) starts an agent turn; omp.context(data) silently updates model context for the next turn (latest value wins, no turn); an element with data-omp-send="text" (optional data-omp-data='{json}') calls omp.send on click. Anything else stays local to the page.
 Theme: CSS variables --fg --muted --border --surface --accent --success --warning --error --c1..--c6 (currentColor works in SVG), plus --bg, --font-ui and --font-mono, follow the OMP theme and Tern's own font and light/dark setting; the page already uses them (html background, body font), so do not hard-code fonts or colors; it is re-themed when the user switches light/dark. Saved under the active OMP agent directory at artifacts/apps/<session>/<id>.html.
 MCP tools linked to a ui:// view (MCP Apps) open their view automatically; list and close also cover those (ids start with "mcp-").`;
@@ -151,7 +151,7 @@ export default async function (pi: ExtensionAPI) {
 				},
 				onSend: (ref, event) => {
 					if (live.get(ref.id)?.muted) return;
-					delivery.event(source(ref), event.text, event.data !== undefined ? [`data: ${JSON.stringify(event.data)}`] : []);
+					delivery.event(source(ref), event.text, [...(event.data !== undefined ? [`data: ${JSON.stringify(event.data)}`] : []), ...(event.gesture ? [`page-reported gesture hint: ${event.gesture} (not host-verified)`] : [])]);
 					scheduleRecapture(ref.id);
 				},
 				onContext: (ref, data) => {
@@ -416,13 +416,7 @@ export default async function (pi: ExtensionAPI) {
 		let placement: Placement | undefined;
 
 		if ("unavailable" in tern) {
-			try {
-				await openExternally(url);
-			} catch (error) {
-				return fail(`Could not open the artifact: ${(error as Error).message}`);
-			}
-			lines.push(`opened in the system browser (${tern.unavailable}); screenshot capture is unavailable.`);
-			await sleep(SETTLE_MS * 1.5, signal);
+			lines.push(`Not opened (${tern.unavailable}): no protected Tern browser block is available. Saved HTML: ${join(files.root, artifact.session, `${artifact.id}.html`)}. The URL above is for manual use only; opening it in a system browser does not enforce the extension's navigation policy.`);
 		} else {
 			const hadBlock = artifact.block !== undefined;
 			try {

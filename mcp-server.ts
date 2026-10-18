@@ -55,12 +55,29 @@ export function shellHtml(view: ShellView): string {
 "use strict";
 var APP_ORIGIN=${origin};
 var iframe=document.getElementById("view");
-var chain=Promise.resolve();
+var queue=[],bytes=0,active=false,overflowLogged=false;
+var MAX_QUEUED=32,MAX_QUEUED_BYTES=256*1024,MAX_BODY=64*1024;
+var encoder=new TextEncoder();
+function drain(){
+  if(active||!queue.length)return;
+  active=true;
+  var item=queue.shift();
+  // Keep the in-flight message in the budget until its request settles.
+  fetch("rpc",{method:"POST",headers:{"content-type":"application/json"},body:item.body})
+    .catch(function(){})
+    .finally(function(){bytes-=item.size;active=false;drain();});
+}
 function relay(message){
   var body;
   try{body=JSON.stringify(message);}catch(e){return;}
-  // One request at a time: the host must see messages in the order the view sent them.
-  chain=chain.then(function(){return fetch("rpc",{method:"POST",headers:{"content-type":"application/json"},body:body});}).catch(function(){});
+  var size=encoder.encode(body).length;
+  if(size>MAX_BODY||queue.length+(active?1:0)>=MAX_QUEUED||bytes+size>MAX_QUEUED_BYTES){
+    if(!overflowLogged){overflowLogged=true;console.warn("MCP app relay dropped excess messages (bounded queue)");}
+    return;
+  }
+  bytes+=size;
+  queue.push({body:body,size:size});
+  drain();
 }
 window.addEventListener("message",function(ev){
   if(ev.source!==iframe.contentWindow||ev.origin!==APP_ORIGIN)return;

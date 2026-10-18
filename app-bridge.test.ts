@@ -301,6 +301,29 @@ describe("ui/message and ui/update-model-context", () => {
 	});
 });
 
+test("audit records omit URL secrets, app log text and exception strings", async () => {
+	const h = harness({
+		async callTool() { throw new Error("synthetic-exception-secret"); },
+		resources: () => ({ uris: ["ui://login:password@srv/view?secret-resource#secret-hash"], templates: [] }),
+	});
+	await ready(h);
+	h.denyLink = "synthetic-refusal-secret";
+	await h.bridge.receive(rpc(11, "ui/open-link", { url: "https://user:pass@example.test/path?secret-query#secret-fragment" }));
+	await h.bridge.receive(rpc(12, "resources/read", { uri: "ui://other/path?secret-resource#secret-hash" }));
+	await h.bridge.receive(rpc(13, "tools/call", { name: "show" }));
+	await h.bridge.receive(note("notifications/message", { level: "warning", logger: "demo", data: "synthetic-log-secret" }));
+	await h.bridge.receive(rpc(14, "resources/read", { uri: "ui://login:password@srv/view?secret-resource#secret-hash" }));
+	h.denyLink = undefined;
+	await h.bridge.receive(rpc(15, "ui/open-link", { url: "https://example.test/path?success-query#success-fragment" }));
+	const logged = JSON.stringify(h.audit);
+	for (const secret of ["user", "pass", "login", "password", "secret-query", "secret-fragment", "secret-resource", "secret-hash", "success-query", "success-fragment", "synthetic-exception-secret", "synthetic-refusal-secret", "synthetic-log-secret"]) {
+		expect(logged).not.toContain(secret);
+	}
+	expect(logged).toContain("example.test/path");
+	expect(logged).toContain("level=warning");
+	expect(logged).toContain("messageLength=");
+});
+
 describe("ui/open-link and display mode", () => {
 	test("opens http(s) links only, normalized, without credentials, and honours the approval refusal", async () => {
 		const h = harness();
@@ -330,6 +353,20 @@ describe("ui/open-link and display mode", () => {
 	});
 });
 
+test("all app ingress shares a bounded budget, including notifications and invalid requests", async () => {
+	const h = harness();
+	await ready(h);
+	h.clock.now += 10_000;
+	h.audit.length = 0;
+	for (let i = 0; i < 100; i++) await h.bridge.receive(note("notifications/message", { data: `message ${i}` }));
+	expect(h.audit.filter(entry => entry.method === "notifications/message").length).toBeLessThan(100);
+	expect(h.audit.filter(entry => entry.kind === "rejected" && entry.detail?.includes("ingress")).length).toBe(1);
+	h.clock.now += 10_000;
+	await h.bridge.receive(rpc(199, "ping"));
+	expect(last(h).result).toEqual({});
+	expect(h.audit.some(entry => entry.detail?.includes("suppressed 36"))).toBe(true);
+});
+
 describe("notifications and teardown", () => {
 	test("size-changed is accepted, logs are audited, unknown notifications are ignored", async () => {
 		const h = harness();
@@ -338,7 +375,7 @@ describe("notifications and teardown", () => {
 		await h.bridge.receive(note("ui/notifications/size-changed", { width: "wide" }));
 		expect(h.bridge.size).toEqual({ width: 400, height: 300 });
 		await h.bridge.receive(note("notifications/message", { level: "warning", data: "careful" }));
-		expect(h.audit.some(entry => entry.method === "notifications/message" && entry.detail === "[warning] careful")).toBe(true);
+		expect(h.audit.some(entry => entry.method === "notifications/message" && entry.detail === "level=warning category=app length=7")).toBe(true);
 		await h.bridge.receive(note("something/else"));
 		expect(h.sent).toHaveLength(0);
 	});

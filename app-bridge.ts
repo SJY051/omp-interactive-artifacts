@@ -76,6 +76,7 @@ const LIMITS: Record<string, Limit> = {
 	"ui/update-model-context": { capacity: 20, perSecond: 10 },
 	"ui/open-link": { capacity: 3, perSecond: 0.2 },
 };
+const INGRESS_LIMIT: Limit = { capacity: 64, perSecond: 16 };
 
 export type ToolAudience = "model" | "app";
 
@@ -139,6 +140,7 @@ export class AppBridge {
 	#pending = new Map<JsonRpcId, (response: { result?: unknown; error?: { code: number; message: string } }) => void>();
 	#nextId = 1;
 	#buckets: Buckets;
+	#droppedIngress = 0;
 	#toolResult: CallToolResult | undefined;
 	#toolResultSent = false;
 
@@ -161,6 +163,17 @@ export class AppBridge {
 
 	/** Handles one raw message from the view. Never throws. */
 	async receive(raw: unknown): Promise<void> {
+		if (!this.#buckets.take("app:ingress", INGRESS_LIMIT)) {
+			if (this.#droppedIngress++ === 0) this.deps.audit({ kind: "rejected", ok: false, detail: "app ingress rate limited" });
+			// Requests still receive a refusal; notifications and malformed input have no response channel.
+			const id = isRecord(raw) && (typeof raw.id === "string" || typeof raw.id === "number") ? raw.id : undefined;
+			if (id !== undefined && this.#state !== "closed") this.init.send(errorResponse(id, ERR.refused, "App ingress rate limited"));
+			return;
+		}
+		if (this.#droppedIngress > 0) {
+			this.deps.audit({ kind: "state", detail: `suppressed ${this.#droppedIngress} app ingress messages` });
+			this.#droppedIngress = 0;
+		}
 		const parsed = parseMessage(raw);
 		if (!parsed.ok) {
 			this.deps.audit({ kind: "rejected", ok: false, detail: parsed.reason });
@@ -172,7 +185,7 @@ export class AppBridge {
 		if (message.kind === "response") {
 			const resolve = this.#pending.get(message.id);
 			if (!resolve) {
-				this.deps.audit({ kind: "rejected", ok: false, detail: `response to unknown request ${String(message.id)}` });
+				this.deps.audit({ kind: "rejected", ok: false, detail: "response to unknown request" });
 				return;
 			}
 			this.#pending.delete(message.id);
@@ -210,7 +223,7 @@ export class AppBridge {
 			this.init.send(resultResponse(id, result ?? {}));
 		} catch (error) {
 			const refusal = error instanceof Refusal ? error : new Refusal(ERR.internal, error instanceof Error ? error.message : String(error));
-			this.deps.audit({ kind: "rpc", method, ok: false, detail: `${summarize(method, params)}: ${refusal.message}` });
+			this.deps.audit({ kind: "rpc", method, ok: false, detail: `${summarize(method, params)}: error code=${refusal.code} category=${error instanceof Refusal ? "refused" : "internal"} messageLength=${refusal.message.length}` });
 			this.init.send(errorResponse(id, refusal.code, refusal.message.slice(0, 500)));
 		}
 	}
@@ -356,6 +369,10 @@ export class AppBridge {
 
 	/** Sends `ui/resource-teardown` and waits for the view's answer (or the timeout) before closing. */
 	async teardown(reason: string, timeoutMs = 1500): Promise<"acknowledged" | "timeout" | "not-ready"> {
+		if (this.#droppedIngress > 0) {
+			this.deps.audit({ kind: "state", detail: `suppressed ${this.#droppedIngress} app ingress messages` });
+			this.#droppedIngress = 0;
+		}
 		if (this.#state !== "ready") {
 			this.#state = "closed";
 			return "not-ready";
@@ -374,20 +391,36 @@ export class AppBridge {
 	}
 }
 
+export function safeUri(value: unknown): string {
+	if (typeof value !== "string") return "[invalid URI]";
+	try {
+		const uri = new URL(value);
+		uri.username = "";
+		uri.password = "";
+		uri.search = "";
+		uri.hash = "";
+		return uri.href.slice(0, 200);
+	} catch {
+		return "[invalid URI]";
+	}
+}
+
 function summarize(method: string, params: Record<string, unknown>): string {
 	switch (method) {
 		case "tools/call":
-			return `tool=${String(params.name).slice(0, 80)}`;
+			return `tool=${typeof params.name === "string" ? params.name.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) : "[invalid]"}`;
 		case "resources/read":
-			return `uri=${String(params.uri).slice(0, 120)}`;
+			return `uri=${safeUri(params.uri)}`;
 		case "ui/open-link":
-			return `url=${String(params.url).slice(0, 200)}`;
+			return `url=${safeUri(params.url)}`;
 		default:
 			return "";
 	}
 }
 
 function logText(params: Record<string, unknown>): string {
-	const data = typeof params.data === "string" ? params.data : JSON.stringify(params.data);
-	return `[${String(params.level ?? "info")}] ${String(data ?? "").slice(0, 500)}`;
+	const level = typeof params.level === "string" && /^(debug|info|notice|warning|error|critical|alert|emergency)$/.test(params.level) ? params.level : "other";
+	const category = typeof params.logger === "string" ? params.logger.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 60) : "app";
+	const length = typeof params.data === "string" ? params.data.length : JSON.stringify(params.data ?? null).length;
+	return `level=${level} category=${category} length=${length}`;
 }

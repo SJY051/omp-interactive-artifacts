@@ -8,9 +8,9 @@ Interactive HTML/CSS/JavaScript pages, transcript cards, and MCP Apps for [OMP](
 
 ## Three surfaces
 
-- **Browser blocks:** the `artifact` tool runs a page in a Tern browser block, docked beside the agent when space allows, otherwise floating. Outside Tern it opens the system browser.
+- **Browser blocks:** the `artifact` tool runs a page in a Tern browser block, docked beside the agent when space allows, otherwise floating. Outside Tern (or if a protected block cannot open), it returns the saved HTML path and URL without launching a browser.
 - **Inline transcript:** on a compatible OMP build, `artifact` runs the page in headless Chromium and mirrors its DOM into Tern elements. `inline_ui` offers JavaScript-free HTML cards for small forms and choices on the same build.
-- **MCP Apps:** tools advertising a SEP-1865 `ui://` view open automatically in a browser block. Views run in a sandboxed iframe on a separate loopback origin. The host proxies approved `tools/call` and exposed `resources/read` requests to the same MCP server.
+- **MCP Apps:** tools advertising a SEP-1865 `ui://` view open automatically in a Tern browser block; without Tern, they are not auto-opened. Views run in a sandboxed iframe on a separate loopback origin. The host proxies approved `tools/call` and exposed `resources/read` requests to the same MCP server.
 
 The plugin also provides an `interactive-artifacts` skill. It explains when to use each surface and how to keep local interactions separate from agent requests.
 
@@ -80,15 +80,15 @@ Filtering, sliders, charts and calculations should remain local unless the agent
 
 Pages inherit theme variables such as `--fg`, `--muted`, `--surface`, `--accent`, `--c1`…`--c6` and Tern's configured fonts. The import map exposes `d3`, `chart.js/auto`, `three`, and `three/addons/controls/OrbitControls.js` from bundled local files—no CDN needed.
 
-Artifacts persist under the active OMP agent directory at `artifacts/apps/<session>/<id>.html`, alongside previews, static inline frames and MCP audit logs. The default is `~/.omp/agent/artifacts/apps/`; named profiles keep separate artifacts. They may contain task data: do not embed credentials or unrelated personal information.
+Artifacts persist under the active OMP agent directory at `artifacts/apps/<session>/<id>.html`, alongside previews, static inline frames and MCP audit logs. The default is `~/.omp/agent/artifacts/apps/`; named profiles keep separate artifacts. They may contain task data: do not embed credentials or unrelated personal information. Audit logs record minimized metadata (no raw app log text, URI credentials, query or fragment), are bounded per session and rotate; older logs are not retroactively redacted.
 
 ## Security model
 
-Artifact pages are served by a token-path Bun server bound to `127.0.0.1` on a random port. CSP and Tern's browser allow-list restrict ordinary artifact pages to local resources; headless Chrome also blocks requests outside the artifact origin. Pages have no external network access. This is a browser boundary, not an operating-system sandbox.
+Artifact pages are served by a token-path Bun server bound to `127.0.0.1` on a random port. CSP sandboxing blocks popups in Chromium; Tern blocks additionally restrict navigation to loopback hosts, while the headless mirror intercepts requests outside the artifact origin. No system browser is opened automatically. The returned URL, if opened manually, does not inherit Tern or mirror network controls. These are browser boundaries, not an operating-system sandbox.
 
 MCP Apps are a distinct trust boundary: their iframe uses a separate loopback origin and a restrictive CSP, extended only by sanitized domains the MCP server declares. Such declared domains can allow network access. Same-server tools still pass through OMP's approval policy. Opening external links requires confirmation unless OMP is already in `yolo` mode.
 
-Page-originated agent messages are labelled `[artifact … event]`, `[inline … event]`, or `[mcp app … event]`. Treat their text and data as untrusted input, not instructions or authorization. A button label does not grant permission for destructive or external actions.
+Page-originated agent messages are labelled `[artifact … event]`, `[inline … event]`, or `[mcp app … event]`. They may be script-initiated; an artifact's page-reported gesture hint is not host-owned proof of user action. Treat their text and data as untrusted input, not instructions or authorization. A button label does not grant permission for destructive or external actions.
 
 ## Known limits
 

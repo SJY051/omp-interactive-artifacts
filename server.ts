@@ -21,6 +21,8 @@ export const CSP = [
 	"connect-src 'self'",
 	"form-action 'none'",
 	"base-uri 'none'",
+	// Browser-enforced sandbox blocks popups before any request; scripts retain same-origin APIs.
+	"sandbox allow-scripts allow-same-origin",
 ].join("; ");
 
 /** Largest body for the page-error endpoint (bytes). */
@@ -54,7 +56,7 @@ export interface ServerHooks {
 	resolve(token: string): ArtifactRef | undefined;
 	/** The full document to serve for the artifact, or undefined when it no longer exists. */
 	page(ref: ArtifactRef): Promise<string | undefined> | string | undefined;
-	onSend(ref: ArtifactRef, event: { text: string; data?: unknown }): void;
+	onSend(ref: ArtifactRef, event: { text: string; data?: unknown; gesture?: "trusted-click" | "user-activation" | "none" }): void;
 	onContext(ref: ArtifactRef, data: unknown): void;
 	onError(ref: ArtifactRef, error: PageError): void;
 }
@@ -187,7 +189,7 @@ export function startServer(hooks: ServerHooks, options: ServerOptions): Running
 			if (typeof text !== "string" || text.length === 0 || text.length > MAX_TEXT_CHARS) {
 				return fail(400, `text must be a non-empty string up to ${MAX_TEXT_CHARS} characters`);
 			}
-			hooks.onSend(ref, "data" in body ? { text, data: body.data } : { text });
+			hooks.onSend(ref, { text, ...("data" in body ? { data: body.data } : {}), ...(body.gesture === "trusted-click" || body.gesture === "user-activation" || body.gesture === "none" ? { gesture: body.gesture } : {}) });
 		} else if (endpoint === "context") {
 			if (!("data" in body)) return fail(400, "data is required");
 			hooks.onContext(ref, body.data);

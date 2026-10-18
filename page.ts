@@ -172,9 +172,9 @@ function post(kind,body,keepalive){
     return r.json().then(function(b){return{ok:false,error:b&&b.error||("HTTP "+r.status)};},function(){return{ok:false,error:"HTTP "+r.status};});
   },function(e){return{ok:false,error:String(e&&e.message||e)};});
 }
-function send(text,data){
+function send(text,data,click){
   if(typeof text!=="string"||!text)return Promise.resolve({ok:false,error:"text must be a non-empty string"});
-  var body={text:text};
+  var body={text:text,gesture:click?"trusted-click":(navigator.userActivation&&navigator.userActivation.isActive?"user-activation":"none")};
   if(data!==undefined)body.data=data;
   return post("send",body);
 }
@@ -190,14 +190,14 @@ function context(data){
     },250);
   });
 }
-Object.defineProperty(window,"omp",{value:Object.freeze({send:send,context:context}),enumerable:true});
+Object.defineProperty(window,"omp",{value:Object.freeze({send:function(text,data){return send(text,data,false);},context:context}),enumerable:true});
 document.addEventListener("click",function(ev){
   var el=ev.target&&ev.target.closest&&ev.target.closest("[data-omp-send]");
   if(!el||el.disabled)return;
   var data,raw=el.getAttribute("data-omp-data");
   if(raw!==null){try{data=JSON.parse(raw);}catch(e){console.error("data-omp-data is not valid JSON: "+raw.slice(0,200));data=raw;}}
   el.setAttribute("data-omp-state","sending");
-  send(el.getAttribute("data-omp-send"),data).then(function(r){
+  send(el.getAttribute("data-omp-send"),data,ev.isTrusted===true).then(function(r){
     if(r.ok){el.removeAttribute("data-omp-state");}
     else{el.setAttribute("data-omp-state","error");el.title=r.error||"not delivered";}
   });
