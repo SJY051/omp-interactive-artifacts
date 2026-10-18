@@ -1,0 +1,25 @@
+{
+  "name": "omp-interactive-artifacts",
+  "version": "1.0.0",
+  "description": "Interactive HTML artifacts, inline cards, and MCP Apps for OMP in Tern",
+  "license": "MIT",
+  "author": "SJY051",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SJY051/omp-interactive-artifacts.git"
+  },
+  "type": "module",
+  "omp": {
+    "extensions": ["./index.ts"]
+  },
+  "scripts": {
+    "build:vendor": "bun run scripts/build-vendor.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "chart.js": "4.5.1",
+    "d3": "7.9.0",
+    "parse5": "8.0.1",
+    "three": "0.186.1"
+  }
+}
